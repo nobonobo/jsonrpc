@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/rpc"
 	jsonrpcorg "net/rpc/jsonrpc"
-	"sync"
 )
 
 const Connected = "200 Connected to JSON RPC"
@@ -27,12 +26,11 @@ func (c *codecWrapper) WriteResponse(r *rpc.Response, x interface{}) error {
 // Server ...
 type Server struct {
 	*rpc.Server
-	pool *sync.Pool
 }
 
 // NewServer ...
 func NewServer() *Server {
-	server := &Server{Server: rpc.NewServer(), pool: &sync.Pool{}}
+	server := &Server{Server: rpc.NewServer()}
 	return server
 }
 
