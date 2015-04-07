@@ -10,10 +10,15 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
-	jsrpc "net/rpc/jsonrpc"
+	org "net/rpc/jsonrpc"
 	"net/url"
-	"sync"
+	"runtime"
 )
+
+var DefaultPoolConnections = runtime.NumCPU()
+
+// RemoteError JSON-RPCにかかわらないエラータイプ
+type RemoteError error
 
 // DialHTTP connects
 func DialHTTP(endpoint string, config *tls.Config) (*rpc.Client, error) {
@@ -45,7 +50,7 @@ func DialHTTP(endpoint string, config *tls.Config) (*rpc.Client, error) {
 
 	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "CONNECT"})
 	if err == nil && resp.Status == Connected {
-		return jsrpc.NewClient(conn), nil
+		return org.NewClient(conn), nil
 	}
 	if err == nil {
 		err = errors.New("unexpected HTTP response: " + resp.Status)
@@ -60,8 +65,8 @@ func DialHTTP(endpoint string, config *tls.Config) (*rpc.Client, error) {
 }
 
 type Client struct {
-	sync.RWMutex
-	pool *sync.Pool
+	pool    chan *conn
+	newFunc func() *conn
 }
 
 type conn struct {
@@ -70,36 +75,32 @@ type conn struct {
 }
 
 func NewClient(endpoint string, config *tls.Config) *Client {
-	return &Client{
-		pool: &sync.Pool{New: func() interface{} {
-			c, err := DialHTTP(endpoint, config)
-			return &conn{Client: c, Error: err}
-		}},
+	client := new(Client)
+	client.pool = make(chan *conn, DefaultPoolConnections)
+	client.newFunc = func() *conn {
+		c, err := DialHTTP(endpoint, config)
+		return &conn{Client: c, Error: err}
 	}
+	return client
 }
 
 func (client *Client) get() *conn {
-	client.RLock()
-	pool := client.pool
-	client.RUnlock()
-	if pool == nil {
-		return nil
+	select {
+	case c, ok := <-client.pool:
+		if ok {
+			return c
+		}
+	default:
 	}
-	c := pool.Get()
-	if c == nil {
-		return nil
-	}
-	return c.(*conn)
+	return client.newFunc()
 }
 
 func (client *Client) put(c *conn) {
-	client.RLock()
-	pool := client.pool
-	client.RUnlock()
-	if pool == nil {
-		return
+	select {
+	case client.pool <- c:
+	default:
+		c.Close()
 	}
-	pool.Put(c)
 }
 
 func (client *Client) fail(serviceMethod string, args interface{}, reply interface{}, done chan *rpc.Call, err error) *rpc.Call {
@@ -141,6 +142,13 @@ func (client *Client) Go(serviceMethod string, args interface{}, reply interface
 		if ok {
 			if r.Error == nil {
 				client.put(c)
+			} else {
+				_, ok := r.Error.(RemoteError)
+				if ok {
+					client.put(c)
+				} else {
+					c.Close()
+				}
 			}
 			r.Done = done
 			select {
@@ -158,18 +166,9 @@ func (client *Client) Call(serviceMethod string, args interface{}, reply interfa
 }
 
 func (client *Client) Close() error {
-	var pool *sync.Pool
-	client.Lock()
-	pool, client.pool = client.pool, nil
-	client.Unlock()
-	pool.New = func() interface{} { return nil }
 	var last error
-	for {
-		v := pool.Get()
-		if v == nil {
-			break
-		}
-		c := v.(*conn)
+	close(client.pool)
+	for c := range client.pool {
 		if err := c.Close(); err != nil {
 			last = err
 		}

@@ -48,8 +48,8 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	case "POST":
 		dst, src := net.Pipe()
 		go io.Copy(src, req.Body)
-		go server.ServeCodec(&codecWrapper{jsonrpcorg.NewServerCodec(dst)})
-		io.Copy(w, src)
+		go io.Copy(w, src)
+		server.ServeCodec(&codecWrapper{jsonrpcorg.NewServerCodec(dst)})
 	default:
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusMethodNotAllowed)
