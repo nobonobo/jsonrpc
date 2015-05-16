@@ -27,9 +27,10 @@ func DialHTTP(endpoint string, config *tls.Config) (*rpc.Client, error) {
 		return nil, err
 	}
 	var conn net.Conn
+	path := DefaultRPCPath
 	switch u.Scheme {
 	case "unix":
-		conn, err = net.Dial("unix", u.Path)
+		conn, err = net.Dial("unix", u.Opaque+u.Path)
 		if err != nil {
 			return nil, err
 		}
@@ -38,15 +39,17 @@ func DialHTTP(endpoint string, config *tls.Config) (*rpc.Client, error) {
 		if err != nil {
 			return nil, err
 		}
+		path = u.Path
 	case "https":
 		conn, err = tls.Dial("tcp", u.Host, config)
 		if err != nil {
 			return nil, err
 		}
+		path = u.Path
 	default:
 		return nil, fmt.Errorf("not supported scheme: %q", u.Scheme)
 	}
-	io.WriteString(conn, "CONNECT "+u.Path+" HTTP/1.0\n\n")
+	io.WriteString(conn, "CONNECT "+path+" HTTP/1.0\n\n")
 
 	resp, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: "CONNECT"})
 	if err == nil && resp.Status == Connected {
