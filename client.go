@@ -12,13 +12,12 @@ import (
 	"net/rpc"
 	org "net/rpc/jsonrpc"
 	"net/url"
-	"runtime"
+	"sync"
 )
 
-var DefaultPoolConnections = runtime.NumCPU()
-
-// RemoteError JSON-RPCにかかわらないエラータイプ
-type RemoteError error
+var (
+	None = &struct{}{}
+)
 
 // DialHTTP connects
 func DialHTTP(endpoint string, config *tls.Config) (*rpc.Client, error) {
@@ -67,122 +66,115 @@ func DialHTTP(endpoint string, config *tls.Config) (*rpc.Client, error) {
 	}
 }
 
+// Client ...
 type Client struct {
-	pool    chan *conn
-	newFunc func() *conn
+	sync.RWMutex
+	newFunc func() (*rpc.Client, error)
+	c       *rpc.Client
+	closing bool
 }
 
-type conn struct {
-	*rpc.Client
-	Error error
-}
-
+// NewClient ...
 func NewClient(endpoint string, config *tls.Config) *Client {
 	client := new(Client)
-	client.pool = make(chan *conn, DefaultPoolConnections)
-	client.newFunc = func() *conn {
-		c, err := DialHTTP(endpoint, config)
-		return &conn{Client: c, Error: err}
+	client.newFunc = func() (*rpc.Client, error) {
+		return DialHTTP(endpoint, config)
 	}
 	return client
 }
 
-func (client *Client) get() *conn {
-	select {
-	case c, ok := <-client.pool:
-		if ok {
-			return c
-		}
-	default:
+func (client *Client) conn() (*rpc.Client, error) {
+	client.RLock()
+	c, closing := client.c, client.closing
+	client.RUnlock()
+	if closing {
+		return nil, fmt.Errorf("closed")
 	}
-	return client.newFunc()
+	if c != nil {
+		return c, nil
+	}
+	client.Lock()
+	defer client.Unlock()
+	c, err := client.newFunc()
+	if err != nil {
+		return nil, err
+	}
+	client.c = c
+	return c, nil
 }
 
-func (client *Client) put(c *conn) {
-	select {
-	case client.pool <- c:
-	default:
-		c.Close()
-	}
-}
-
-func (client *Client) fail(serviceMethod string, args interface{}, reply interface{}, done chan *rpc.Call, err error) *rpc.Call {
-	call := new(rpc.Call)
-	call.ServiceMethod = serviceMethod
-	call.Args = args
-	call.Reply = reply
+// Go ...
+func (client *Client) Go(serviceMethod string, args interface{}, reply interface{}, done chan *rpc.Call) *rpc.Call {
 	if done == nil {
 		done = make(chan *rpc.Call, 1)
-	}
-	call.Done = done
-	call.Error = err
-	select {
-	case call.Done <- call:
-	default:
-	}
-	return call
-}
-
-func (client *Client) Go(serviceMethod string, args interface{}, reply interface{}, done chan *rpc.Call) *rpc.Call {
-	if done != nil && cap(done) == 0 {
+	} else if cap(done) == 0 {
 		log.Panic("rpc: done channel is unbuffered")
 	}
-	c := client.get()
-	if c == nil {
-		return client.fail(serviceMethod, args, reply, done, fmt.Errorf("closed"))
+	c, err := client.conn()
+	if err != nil {
+		call := &rpc.Call{
+			ServiceMethod: serviceMethod,
+			Args:          args,
+			Reply:         reply,
+			Done:          done,
+			Error:         err,
+		}
+		call.Done <- call
+		return call
 	}
-	if c.Error != nil {
-		return client.fail(serviceMethod, args, reply, done, c.Error)
-	}
-	call := c.Go(serviceMethod, args, reply, nil)
+	pre := make(chan *rpc.Call, 1)
+	call := c.Go(serviceMethod, args, reply, pre)
 	if call.Error != nil {
 		return call
 	}
-	cc := *call
-	cc.Done = done
+	call.Done = done
 	go func() {
-		r, ok := <-call.Done
-		if ok {
-			if r.Error == nil {
-				client.put(c)
-			} else {
-				_, ok := r.Error.(RemoteError)
-				if ok {
-					client.put(c)
-				} else {
-					c.Close()
-				}
-			}
-			r.Done = done
-			select {
-			case done <- r:
-			default:
+		r, ok := <-pre
+		if !ok {
+			return
+		}
+		if r.Error != nil {
+			if _, ok := r.Error.(rpc.ServerError); ok {
+				client.Lock()
+				client.c.Close()
+				client.c = nil
+				client.Unlock()
 			}
 		}
+		select {
+		case done <- r:
+		default:
+		}
+		client.Lock()
+		if client.closing {
+			client.c.Close()
+			client.c = nil
+		}
+		client.Unlock()
 	}()
-	return &cc
+	return call
 }
 
+// Call ...
 func (client *Client) Call(serviceMethod string, args interface{}, reply interface{}) error {
 	call := <-client.Go(serviceMethod, args, reply, make(chan *rpc.Call, 1)).Done
 	return call.Error
 }
 
+// Close ...
 func (client *Client) Close() error {
-	var last error
-	close(client.pool)
-	for c := range client.pool {
-		if err := c.Close(); err != nil {
-			last = err
-		}
-	}
-	return last
+	client.Lock()
+	defer client.Unlock()
+	client.closing = true
+	return nil
 }
 
+// Get ...
 func (client *Client) Get(prefix string) Service {
 	return &service{Client: client, prefix: prefix + "."}
 }
 
+// Service ...
 type Service interface {
 	Call(serviceMethod string, args interface{}, reply interface{}) error
 	Go(serviceMethod string, args interface{}, reply interface{}, done chan *rpc.Call) *rpc.Call
