@@ -69,8 +69,8 @@ func (c *rpcCodec) ReadResponseHeader(r *rpc.Response) error {
 	return c.ClientCodec.ReadResponseHeader(r)
 }
 
-// DialHTTP connected Client
-func DialHTTP(endpoint string, config *tls.Config) (*rpc.Client, error) {
+// NewClient connected Client
+func NewClient(endpoint string, config *tls.Config) (*rpc.Client, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
 		return nil, err

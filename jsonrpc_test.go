@@ -25,7 +25,7 @@ func TestJsonrpcSync(t *testing.T) {
 	mux.Handle(DefaultRPCPath, DefaultServer)
 	endpoint := hs.URL + DefaultRPCPath
 
-	client, err := DialHTTP(endpoint, nil)
+	client, err := NewClient(endpoint, nil)
 	if err != nil {
 		t.Log(err)
 		t.FailNow()
@@ -49,7 +49,7 @@ func TestJsonrpcAsync(t *testing.T) {
 	mux.Handle(DefaultRPCPath, DefaultServer)
 	endpoint := hs.URL + DefaultRPCPath
 
-	client, err := DialHTTP(endpoint, nil)
+	client, err := NewClient(endpoint, nil)
 	if err != nil {
 		t.Log(err)
 		t.FailNow()
