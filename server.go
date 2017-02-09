@@ -9,6 +9,7 @@ import (
 	jsonrpcorg "net/rpc/jsonrpc"
 )
 
+// Connected Response String for CONNECT/HTTP
 const Connected = "200 Connected to JSON RPC"
 
 var (

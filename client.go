@@ -25,7 +25,7 @@ func NewClientLocal() *rpc.Client {
 func NewClientHTTP(endpoint string) *rpc.Client {
 	buf := bytes.NewBuffer(nil)
 	r, w := io.Pipe()
-	return rpc.NewClientWithCodec(&rpcCodec{
+	return rpc.NewClientWithCodec(&httpCodec{
 		ClientCodec: jsonrpcorg.NewClientCodec(struct {
 			io.Writer
 			io.ReadCloser
@@ -37,7 +37,8 @@ func NewClientHTTP(endpoint string) *rpc.Client {
 	})
 }
 
-type rpcCodec struct {
+// httpCodec Codec for POST/HTTP
+type httpCodec struct {
 	rpc.ClientCodec
 	endpoint string
 	buf      *bytes.Buffer
@@ -45,7 +46,7 @@ type rpcCodec struct {
 	ch       chan *http.Response
 }
 
-func (c *rpcCodec) WriteRequest(r *rpc.Request, v interface{}) error {
+func (c *httpCodec) WriteRequest(r *rpc.Request, v interface{}) error {
 	c.buf.Reset()
 	if err := c.ClientCodec.WriteRequest(r, v); err != nil {
 		return err
@@ -58,7 +59,7 @@ func (c *rpcCodec) WriteRequest(r *rpc.Request, v interface{}) error {
 	return nil
 }
 
-func (c *rpcCodec) ReadResponseHeader(r *rpc.Response) error {
+func (c *httpCodec) ReadResponseHeader(r *rpc.Response) error {
 	resp := <-c.ch
 	if resp != nil {
 		go func() {
@@ -69,7 +70,7 @@ func (c *rpcCodec) ReadResponseHeader(r *rpc.Response) error {
 	return c.ClientCodec.ReadResponseHeader(r)
 }
 
-// NewClient connected Client
+// NewClient Client for CONNECT/HTTP
 func NewClient(endpoint string, config *tls.Config) (*rpc.Client, error) {
 	u, err := url.Parse(endpoint)
 	if err != nil {
