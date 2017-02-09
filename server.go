@@ -2,8 +2,8 @@ package jsonrpc
 
 import (
 	"io"
+	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
 	"net/rpc"
 	jsonrpcorg "net/rpc/jsonrpc"
@@ -11,17 +11,12 @@ import (
 
 const Connected = "200 Connected to JSON RPC"
 
-// DefaultRPCPath ...
-var DefaultRPCPath = "/jsonrpc"
-
-type codecWrapper struct {
-	rpc.ServerCodec
-}
-
-func (c *codecWrapper) WriteResponse(r *rpc.Response, x interface{}) error {
-	defer c.ServerCodec.Close()
-	return c.ServerCodec.WriteResponse(r, x)
-}
+var (
+	// DefaultRPCPath ...
+	DefaultRPCPath = "/jsonrpc"
+	// DefaultServer ...
+	DefaultServer = NewServer()
+)
 
 // Server ...
 type Server struct {
@@ -30,8 +25,7 @@ type Server struct {
 
 // NewServer ...
 func NewServer() *Server {
-	server := &Server{Server: rpc.NewServer()}
-	return server
+	return &Server{rpc.NewServer()}
 }
 
 // ServeHTTP implements an http.Handler that answers RPC requests.
@@ -46,13 +40,32 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		io.WriteString(conn, "HTTP/1.0 "+Connected+"\n\n")
 		server.ServeCodec(jsonrpcorg.NewServerCodec(conn))
 	case "POST":
-		dst, src := net.Pipe()
-		go io.Copy(src, req.Body)
-		go io.Copy(w, src)
-		server.ServeCodec(&codecWrapper{jsonrpcorg.NewServerCodec(dst)})
+		dst := &struct {
+			io.ReadCloser
+			io.Writer
+		}{
+			ioutil.NopCloser(req.Body),
+			w,
+		}
+		server.ServeRequest(jsonrpcorg.NewServerCodec(dst))
 	default:
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		io.WriteString(w, "405 POST or CONNECT\n")
 	}
+}
+
+// HandleHTTP ...
+func HandleHTTP() {
+	http.Handle(DefaultRPCPath, DefaultServer)
+}
+
+// Register ...
+func Register(rcvr interface{}) error {
+	return DefaultServer.Register(rcvr)
+}
+
+// ServeCodec ...
+func ServeCodec(codec rpc.ServerCodec) {
+	DefaultServer.ServeCodec(codec)
 }
