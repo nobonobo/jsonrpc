@@ -21,12 +21,15 @@ func TestJsonrpcSync(t *testing.T) {
 	mux := http.NewServeMux()
 	hs := httptest.NewServer(mux)
 	defer hs.Listener.Close()
-	server := NewServer()
-	server.Register(&Sample{})
-	mux.Handle(DefaultRPCPath, server)
+	Register(&Sample{})
+	mux.Handle(DefaultRPCPath, DefaultServer)
 	endpoint := hs.URL + DefaultRPCPath
 
-	client := NewClient(endpoint, nil)
+	client, err := DialHTTP(endpoint, nil)
+	if err != nil {
+		t.Log(err)
+		t.FailNow()
+	}
 	defer client.Close()
 	for i := 0; i < 10; i++ {
 		args := []int{5 * i, 8 * i}
@@ -42,12 +45,62 @@ func TestJsonrpcAsync(t *testing.T) {
 	mux := http.NewServeMux()
 	hs := httptest.NewServer(mux)
 	defer hs.Listener.Close()
-	server := NewServer()
-	server.Register(&Sample{})
-	mux.Handle(DefaultRPCPath, server)
+	Register(&Sample{})
+	mux.Handle(DefaultRPCPath, DefaultServer)
 	endpoint := hs.URL + DefaultRPCPath
 
-	client := NewClient(endpoint, nil)
+	client, err := DialHTTP(endpoint, nil)
+	if err != nil {
+		t.Log(err)
+		t.FailNow()
+	}
+	defer client.Close()
+	wg := sync.WaitGroup{}
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			args := []int{5 * n, 8 * n}
+			reply := 0
+			if err := client.Call("Sample.Add", &args, &reply); err != nil {
+				t.Log(err)
+			}
+			t.Log(n, ": reply =", reply)
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestJsonrpcPost(t *testing.T) {
+	mux := http.NewServeMux()
+	hs := httptest.NewServer(mux)
+	defer hs.Listener.Close()
+	Register(&Sample{})
+	mux.Handle(DefaultRPCPath, DefaultServer)
+	endpoint := hs.URL + DefaultRPCPath
+
+	client := NewClientHTTP(endpoint)
+	defer client.Close()
+	wg := sync.WaitGroup{}
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			args := []int{5 * n, 8 * n}
+			reply := 0
+			if err := client.Call("Sample.Add", &args, &reply); err != nil {
+				t.Log(err)
+			}
+			t.Log(n, ": reply =", reply)
+		}(i)
+	}
+	wg.Wait()
+}
+
+func TestJsonrpcLocal(t *testing.T) {
+	Register(&Sample{})
+
+	client := NewClientLocal()
 	defer client.Close()
 	wg := sync.WaitGroup{}
 	for i := 0; i < 10; i++ {
